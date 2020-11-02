@@ -4,8 +4,9 @@ use std::process::*;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::io::Read;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::io::Write;
+use std::thread;
 
 pub enum Event {
     OnServerReady
@@ -15,9 +16,10 @@ pub struct McServer {
 
     child: Child,
     stdin: ChildStdin,
-    stdout: Mutex<BufReader<ChildStdout>>,
+    //stdout: Arc<Mutex<BufReader<ChildStdout>>>,
+    stdout_thread: Option<thread::JoinHandle<()>>,
 
-    callbacks: HashMap<u32, Vec<Box<dyn Fn()>>>
+    callbacks: Arc<Mutex<HashMap<u32, Vec<Arc<dyn Fn() + Send + Sync>>>>>
 }
 
 impl McServer {
@@ -37,28 +39,41 @@ impl McServer {
                 .expect("Failed to spawn child process");
   
         let stdin = child.stdin.take().unwrap();
-        let stdout = Mutex::from(BufReader::new(child.stdout.take().unwrap()));
+        let stdout = Arc::from(Mutex::from(BufReader::new(child.stdout.take().unwrap())));
 
-        let callbacks = HashMap::new();
+        let callbacks: Arc<Mutex<HashMap<u32, Vec<Arc<dyn Fn() + Send + Sync>>>>> = Arc::from(Mutex::from(HashMap::new()));
+        
+        let callbacks2 = callbacks.clone();
+
+        let callbacks = callbacks.clone();
+        let stdout_thread = thread::Builder::new()
+            .name(String::from("thread_server_listen"))
+            .spawn( move || {
+                loop { Self::listen(stdout.clone(), callbacks2.clone()); }
+            }).unwrap();
+        let stdout_thread = Some(stdout_thread);
 
         return McServer {
             child,
             stdin,
-            stdout,
-            callbacks
+            //stdout,
+            callbacks,
+            stdout_thread
         }
     }
 
-    pub fn add_event_callback(&mut self, event: Event, callback: Box<dyn Fn()>) {      
-        let vec = self.callbacks.entry(event as u32).or_insert(Vec::new());
+    pub fn add_event_callback(&mut self, event: Event, callback: Arc<dyn Fn() + Send + Sync>) {      
+        let mut callbacks = self.callbacks.lock().unwrap();
+        
+        let vec = callbacks.entry(event as u32).or_insert(Vec::new());
 
         vec.push(callback);
     }
 
-    pub fn listen(&self) {
+    pub fn listen(stdout: Arc<Mutex<BufReader<ChildStdout>>>, callbacks: Arc<Mutex<HashMap<u32, Vec<Arc<dyn Fn() + Send + Sync>>>>>) {
 
         loop {
-            let mut lines = self.stdout.lock().unwrap();
+            let mut lines = stdout.lock().unwrap();
             let lines = lines.by_ref().lines();
             for line in lines {
                 let line = match line {
@@ -69,14 +84,14 @@ impl McServer {
                 };
     
                 if line.contains("Done") {
-                    self.execute_callbacks(Event::OnServerReady);
+                    Self::execute_callbacks(Event::OnServerReady, callbacks.clone());
                 }
             }
         }
     }
 
-    fn execute_callbacks(&self, event: Event) {
-        for callback in self.callbacks.get(&(event as u32)).unwrap() {
+    fn execute_callbacks(event: Event, callbacks: Arc<Mutex<HashMap<u32, Vec<Arc<dyn Fn() + Send + Sync>>>>>) {
+        for callback in callbacks.lock().unwrap().get(&(event as u32)).unwrap() {
             callback();
         }
     }
