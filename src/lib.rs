@@ -1,44 +1,59 @@
 use std::process::Stdio;
-use std::io::BufReader;
 use std::process::*;
 use std::collections::HashMap;
-use std::io::BufRead;
-use std::io::Read;
+use std::io::{Read, Write, BufReader, BufRead};
 use std::sync::{Arc, Mutex};
-use std::io::Write;
 use std::thread;
 
-pub enum Event {
-    OnServerReady
+pub enum Event 
+{   
+    /// An event that occurs when the server begins the startup process
+    OnServerStarting,
+    /// An event that occurs when the server has loaded and is ready to accept clients
+    OnServerReady,
+    /// An event that occurs when the server has completely shutdown
+    OnServerStop,
+    /// An event that occurs when the eula has not been signed, causing the server to shutdown
+    NeedEulaSigned,
 }
 
-pub struct Builder {
-    callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send + Sync>>>
+pub struct Builder 
+{
+    callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send>>>
 }
 
 impl Builder {
-    pub fn init() -> Builder {
-        let callbacks = HashMap::default();
+    pub fn init() -> Builder 
+    {
+        let mut callbacks = HashMap::default();
 
-        return Builder {
+        callbacks.insert(Event::OnServerStop     as u32, Vec::default());
+        callbacks.insert(Event::OnServerReady    as u32, Vec::default());
+        callbacks.insert(Event::OnServerStarting as u32, Vec::default());
+        callbacks.insert(Event::NeedEulaSigned   as u32, Vec::default());
+
+        return Builder 
+        {
             callbacks
         }
     }
 
-    pub fn add_event_callback(mut self, event: Event, callback: Box<dyn Fn() + Send + Sync> )->Self {
-        let vec = self.callbacks.entry(event as u32).or_insert(Vec::new());
+    pub fn add_event_callback(mut self, event: Event, callback: Box<dyn Fn() + Send + Sync> ) -> Self 
+    {
+        let vec = self.callbacks.entry(event as u32).or_default();
         vec.push(callback);
 
         return self;
     }
 
-    pub fn build(self)-> McServer {
+    pub fn build(self)-> McServer 
+    {
         return McServer::build(self)
     }
 }
 
-pub struct McServer {
-
+pub struct McServer 
+{
     //child: Child,
     stdin: ChildStdin,
     //stdout: Arc<Mutex<BufReader<ChildStdout>>>,
@@ -46,16 +61,22 @@ pub struct McServer {
     //callbacks: Arc<HashMap<u32, Vec<Box<dyn Fn() + Send + Sync>>>>
 }
 
-impl Drop for McServer {
-    fn drop(&mut self) {
-        self.stdin.write("/stop\n".as_bytes()).unwrap();
+impl Drop for McServer 
+{
+    fn drop(&mut self) 
+    {
+        match self.stdin.write("/stop\n".as_bytes()) {
+            Ok(_) => {},
+            Err(_) => {/*When Server shuts down on its own and the pipe is disconnected*/}
+        }
         self.stdout_thread.take().map(thread::JoinHandle::join);
     } 
 }
 
-impl McServer {
-
-    fn build(builder: Builder)->McServer {
+impl McServer 
+{
+    fn build(builder: Builder)->McServer 
+    {
         let mut child = Command::new("java")
                 .current_dir("./server")
                 .arg("-Xmx1024M")
@@ -90,10 +111,10 @@ impl McServer {
         }
     }
 
-    fn listen(stdout: Arc<Mutex<BufReader<ChildStdout>>>, callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send + Sync>>>) {
-
+    fn listen(stdout: Arc<Mutex<BufReader<ChildStdout>>>, callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send>>>) 
+    {
         let mut stop = false;
-
+        Self::execute_callbacks(Event::OnServerStarting, &callbacks);
         while !stop {
             let mut lines = stdout.lock().unwrap();
             let lines = lines.by_ref().lines();
@@ -110,14 +131,19 @@ impl McServer {
                 }
 
                 else if line.contains("Stopping server") {
-                    println!("Stop received!");
+                    stop = true;
+                }
+
+                else if line.contains("eula.txt") {
+                    Self::execute_callbacks(Event::NeedEulaSigned, &callbacks);
                     stop = true;
                 }
             }
         }
+        Self::execute_callbacks(Event::OnServerStop, &callbacks);
     }
 
-    fn execute_callbacks(event: Event, callbacks: &HashMap<u32, Vec<Box<dyn Fn() + Send + Sync>>>) {
+    fn execute_callbacks(event: Event, callbacks: &HashMap<u32, Vec<Box<dyn Fn() + Send>>>) {
         for callback in callbacks.get(&(event as u32)).unwrap() {
             callback();
         }
