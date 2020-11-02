@@ -13,6 +13,10 @@ pub enum Event
     OnServerReady,
     /// An event that occurs when the server has completely shutdown
     OnServerStop,
+    /// An event that occurs when a user has joined the game
+    OnUserJoinGame,
+    ///An event that occurs when a user has left the game
+    OnUserLeaveGame,
     /// An event that occurs when the eula has not been signed, causing the server to shutdown
     NeedEulaSigned,
 }
@@ -31,6 +35,8 @@ impl Builder {
         callbacks.insert(Event::OnServerReady    as u32, Vec::default());
         callbacks.insert(Event::OnServerStarting as u32, Vec::default());
         callbacks.insert(Event::NeedEulaSigned   as u32, Vec::default());
+        callbacks.insert(Event::OnUserJoinGame   as u32, Vec::default());
+        callbacks.insert(Event::OnUserLeaveGame  as u32, Vec::default());
 
         return Builder 
         {
@@ -128,6 +134,14 @@ impl McServer
     
                 if line.contains("Done") {
                     Self::execute_callbacks(Event::OnServerReady, &callbacks);
+                }
+
+                else if line.contains("joined the game") {
+                    Self::execute_callbacks(Event::OnUserJoinGame, &callbacks);
+                }
+
+                else if line.contains("left the game") {
+                    Self::execute_callbacks(Event::OnUserLeaveGame, &callbacks);
                 }
 
                 else if line.contains("Stopping server") {
