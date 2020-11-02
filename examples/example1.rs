@@ -1,8 +1,17 @@
 
 use mcw_rs::*;
 use std::io;
+use std::sync::{Arc, Mutex};
 fn main() {
-    let x = || {println!("Callback: Server is started!")};
+    
+    let num = Arc::from(Mutex::from(5));
+    let num_copy = num.clone();
+    let x = move || {
+        
+        let num_copy = num_copy.lock().unwrap();
+        println!("Callback: Server is started! Here is a number for no reason: {}", num_copy);
+    };
+    
     let y = || {println!("Callback: Server is stopped!")};
     let z = || {println!("Callback: Sign the Eula!")};
     
