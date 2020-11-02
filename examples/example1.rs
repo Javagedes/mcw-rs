@@ -1,14 +1,17 @@
 
 use mcw_rs::*;
-use std::sync::Arc;
-
+use std::io;
+use std::io::*;
 fn main() {
-    let mut server = McServer::init();
-
     let x = || {println!("Server is ready to go!!")};
+    
+    let server = Builder::init()
+        .add_event_callback(Event::OnServerReady, Box::from(x))
+        .add_event_callback(Event::OnServerReady, Box::from(x))
+        .build();
 
-    server.add_event_callback(Event::OnServerReady, Arc::from(x));
-    server.add_event_callback(Event::OnServerReady, Arc::from(x));
-
-    loop {}
+        println!("Press any button to stop...");
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("error: unable to read user input");
+        println!("{}",input);
 }
