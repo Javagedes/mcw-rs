@@ -1,6 +1,6 @@
 use std::process::Stdio;
 use std::process::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write, BufReader, BufRead};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -48,7 +48,6 @@ impl Builder {
     {
         let vec = self.callbacks.entry(event as u32).or_default();
         vec.push(callback);
-
         return self;
     }
 
@@ -65,6 +64,7 @@ pub struct McServer
     //stdout: Arc<Mutex<BufReader<ChildStdout>>>,
     stdout_thread: Option<thread::JoinHandle<()>>,
     //callbacks: Arc<HashMap<u32, Vec<Box<dyn Fn() + Send + Sync>>>>
+    con_players: Arc<Mutex<HashSet<String>>>
 }
 
 impl Drop for McServer 
@@ -95,6 +95,9 @@ impl McServer
                 .stderr(Stdio::piped())
                 .spawn()
                 .expect("Failed to spawn child process");
+
+        let con_players = Arc::from(Mutex::from(HashSet::new()));
+        let con_players_thd = con_players.clone();
   
         let stdin = child.stdin.take().unwrap();
         let stdout = Arc::from(Mutex::from(BufReader::new(child.stdout.take().unwrap())));
@@ -104,7 +107,7 @@ impl McServer
         let stdout_thread = thread::Builder::new()
             .name(String::from("thread_server_listen"))
             .spawn( move || {
-                Self::listen(stdout.clone(), callbacks);
+                Self::listen(stdout, callbacks, con_players_thd);
             }).unwrap();
         
             let stdout_thread = Some(stdout_thread);
@@ -113,11 +116,12 @@ impl McServer
             //child,
             stdin,
             //callbacks,
-            stdout_thread
+            stdout_thread,
+            con_players
         }
     }
 
-    fn listen(stdout: Arc<Mutex<BufReader<ChildStdout>>>, callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send>>>) 
+    fn listen(stdout: Arc<Mutex<BufReader<ChildStdout>>>, callbacks: HashMap<u32, Vec<Box<dyn Fn() + Send>>>, con_players: Arc<Mutex<HashSet<String>>>) 
     {
         let mut stop = false;
         Self::execute_callbacks(Event::OnServerStarting, &callbacks);
@@ -137,10 +141,14 @@ impl McServer
                 }
 
                 else if line.contains("joined the game") {
+                    let name = line.split(": ").collect::<Vec<_>>()[1].split(" ").collect::<Vec<_>>()[0];
+                    con_players.lock().unwrap().insert(String::from(name));
                     Self::execute_callbacks(Event::OnUserJoinGame, &callbacks);
                 }
 
                 else if line.contains("left the game") {
+                    let name = line.split(": ").collect::<Vec<_>>()[1].split(" ").collect::<Vec<_>>()[0];
+                    con_players.lock().unwrap().remove(&String::from(name));
                     Self::execute_callbacks(Event::OnUserLeaveGame, &callbacks);
                 }
 
@@ -161,5 +169,13 @@ impl McServer
         for callback in callbacks.get(&(event as u32)).unwrap() {
             callback();
         }
+    }
+
+    pub fn get_conn_player_count(&self)->usize {
+        return self.con_players.lock().unwrap().len()
+    }
+
+    pub fn get_conn_player_name(&self)->Vec<String> {
+        return self.con_players.lock().unwrap().iter().map(|x|x.clone()).collect();
     }
 }
